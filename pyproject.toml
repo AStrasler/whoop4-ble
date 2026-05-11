@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "whoop4-ble"
+version = "0.1.0"
+description = "Direct BLE access to the Whoop 4.0 strap — pull your own HR/RR/accel data, fix the firmware RTC, stream live HR. No subscription required."
+readme = "README.md"
+license = { file = "LICENSE" }
+authors = [{ name = "Andy Guzman" }]
+requires-python = ">=3.10"
+keywords = ["whoop", "bluetooth", "ble", "heart-rate", "hrv", "fitness", "reverse-engineering"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering",
+    "Topic :: System :: Hardware",
+]
+dependencies = [
+    "bleak>=0.21.0",
+    "websockets>=11.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/andyguzmaneth/whoop4-ble"
+Repository = "https://github.com/andyguzmaneth/whoop4-ble"
+Documentation = "https://github.com/andyguzmaneth/whoop4-ble/blob/main/docs/PROTOCOL.md"
+
+[tool.setuptools.packages.find]
+where = ["src"]

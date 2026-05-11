@@ -1,0 +1,1803 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Whoop BLE Monitor</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg:      #0d1117;
+    --panel:   #161b22;
+    --border:  #30363d;
+    --text:    #e6edf3;
+    --muted:   #8b949e;
+    --blue:    #58a6ff;
+    --green:   #3fb950;
+    --yellow:  #d29922;
+    --orange:  #f0883e;
+    --red:     #f85149;
+    --purple:  #bc8cff;
+    --cyan:    #39d353;
+    --accent:  #1f6feb;
+
+    /* type badge colors */
+    --col-historical: #3fb950;
+    --col-metadata:   #bc8cff;
+    --col-event:      #f0883e;
+    --col-console:    #8b949e;
+    --col-cmd-resp:   #58a6ff;
+    --col-realtime:   #39d353;
+    --col-hr:         #f85149;
+    --col-system:     #d29922;
+    --col-unknown:    #e6edf3;
+  }
+
+  html, body {
+    height: 100%;
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', 'Consolas', monospace;
+    font-size: 13px;
+    overflow: hidden;
+  }
+
+  /* ── Layout ── */
+  #app {
+    display: grid;
+    grid-template-rows: 54px 1fr 180px;
+    height: 100vh;
+  }
+
+  /* ── Topbar ── */
+  #topbar {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 0 16px;
+    background: var(--panel);
+    border-bottom: 1px solid var(--border);
+    flex-wrap: wrap;
+    overflow: hidden;
+  }
+
+  #topbar .brand {
+    font-weight: 700;
+    font-size: 14px;
+    color: var(--text);
+    white-space: nowrap;
+    letter-spacing: 0.04em;
+  }
+
+  .stat-block {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    min-width: 52px;
+  }
+  .stat-val {
+    font-size: 18px;
+    font-weight: 700;
+    line-height: 1;
+  }
+  .stat-label {
+    font-size: 9px;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    margin-top: 2px;
+  }
+  .divider { width: 1px; height: 34px; background: var(--border); flex-shrink: 0; }
+
+  #ws-status {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    color: var(--muted);
+    white-space: nowrap;
+  }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+  .dot.connected { background: var(--green); box-shadow: 0 0 6px var(--green); }
+  .dot.disconnected { background: var(--red); }
+  .dot.ble-on { background: var(--green); }
+  .dot.ble-off { background: var(--red); }
+  .dot.wrist-on { background: var(--green); }
+  .dot.wrist-off { background: var(--red); }
+  .dot.wrist-unknown { background: var(--muted); }
+
+  .btn {
+    background: var(--border);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    padding: 4px 10px;
+    cursor: pointer;
+    font: inherit;
+    font-size: 11px;
+    white-space: nowrap;
+  }
+  .btn:hover { background: #21262d; border-color: var(--muted); }
+  .btn.danger { border-color: var(--red); color: var(--red); }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+
+  /* ── Main area ── */
+  #main {
+    display: grid;
+    grid-template-columns: 60fr 40fr;
+    overflow: hidden;
+    min-height: 0;
+  }
+
+  /* ── Packet stream ── */
+  #stream-panel {
+    display: flex;
+    flex-direction: column;
+    border-right: 1px solid var(--border);
+    overflow: hidden;
+    min-height: 0;
+  }
+
+  #stream-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 10px;
+    background: var(--panel);
+    border-bottom: 1px solid var(--border);
+    flex-wrap: wrap;
+    flex-shrink: 0;
+  }
+
+  #search-box {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    color: var(--text);
+    font: inherit;
+    font-size: 11px;
+    padding: 3px 8px;
+    width: 160px;
+  }
+  #search-box:focus { outline: none; border-color: var(--blue); }
+
+  .filter-toggle {
+    display: flex;
+    align-items: center;
+    gap: 3px;
+    font-size: 10px;
+    cursor: pointer;
+    user-select: none;
+    white-space: nowrap;
+  }
+  .filter-toggle input { accent-color: var(--blue); margin: 0; }
+
+  .badge {
+    display: inline-block;
+    padding: 1px 5px;
+    border-radius: 3px;
+    font-size: 9px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+
+  #stream-list {
+    flex: 1;
+    overflow-y: auto;
+    overflow-x: hidden;
+  }
+  #stream-list::-webkit-scrollbar { width: 6px; }
+  #stream-list::-webkit-scrollbar-track { background: transparent; }
+  #stream-list::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+  .pkt-row {
+    display: grid;
+    grid-template-columns: 68px 76px 88px 1fr;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 10px;
+    border-bottom: 1px solid rgba(48,54,61,0.4);
+    cursor: pointer;
+    transition: background 0.1s;
+  }
+  .pkt-row:hover { background: #1c2128; }
+  .pkt-row.selected { background: #1f2937; outline: 1px solid var(--accent) inset; }
+
+  .pkt-ts { color: var(--muted); font-size: 10px; }
+  .pkt-preview { color: var(--muted); font-size: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  /* ── Detail panel ── */
+  #detail-panel {
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    min-height: 0;
+  }
+
+  #detail-header {
+    padding: 8px 12px;
+    background: var(--panel);
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-shrink: 0;
+  }
+  #detail-header h3 { font-size: 12px; color: var(--muted); font-weight: 500; }
+
+  #detail-content {
+    flex: 1;
+    overflow-y: auto;
+    padding: 12px;
+  }
+  #detail-content::-webkit-scrollbar { width: 6px; }
+  #detail-content::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+  .detail-section { margin-bottom: 14px; }
+  .detail-section h4 {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--muted);
+    margin-bottom: 6px;
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 3px;
+  }
+
+  /* Hex dump */
+  .hex-grid {
+    font-size: 11px;
+    line-height: 1.8;
+  }
+  .hex-row {
+    display: flex;
+    gap: 0;
+    align-items: baseline;
+  }
+  .hex-offset {
+    color: var(--muted);
+    width: 36px;
+    flex-shrink: 0;
+    font-size: 10px;
+  }
+  .hex-bytes {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 2px;
+    flex: 1;
+  }
+  .hb {
+    display: inline-block;
+    width: 22px;
+    text-align: center;
+    border-radius: 2px;
+    cursor: default;
+    position: relative;
+  }
+  .hb:hover::after {
+    content: attr(data-tip);
+    position: absolute;
+    bottom: calc(100% + 4px);
+    left: 50%;
+    transform: translateX(-50%);
+    background: #1c2128;
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 3px 6px;
+    border-radius: 4px;
+    white-space: nowrap;
+    font-size: 10px;
+    z-index: 100;
+    pointer-events: none;
+  }
+
+  /* Field color classes */
+  .hb-seq    { background: rgba(139,148,158,0.25); color: #8b949e; }
+  .hb-ts     { background: rgba(88,166,255,0.2);  color: var(--blue); }
+  .hb-subsec { background: rgba(57,211,83,0.15);  color: var(--cyan); }
+  .hb-flags  { background: rgba(57,211,83,0.15);  color: var(--cyan); }
+  .hb-hr     { background: rgba(63,185,80,0.25);  color: var(--green); }
+  .hb-rr-cnt { background: rgba(210,153,34,0.2);  color: var(--yellow); }
+  .hb-rr     { background: rgba(240,136,62,0.2);  color: var(--orange); }
+  .hb-accel  { background: rgba(188,140,255,0.2); color: var(--purple); }
+  .hb-trim   { background: rgba(188,140,255,0.2); color: var(--purple); }
+  .hb-start  { background: rgba(88,166,255,0.2);  color: var(--blue); }
+  .hb-end    { background: rgba(240,136,62,0.2);  color: var(--orange); }
+  .hb-dim    { color: #444c56; }
+
+  /* Decoded fields table */
+  .decoded-table { width: 100%; border-collapse: collapse; }
+  .decoded-table td {
+    padding: 3px 6px;
+    vertical-align: top;
+    border-bottom: 1px solid rgba(48,54,61,0.5);
+    font-size: 11px;
+  }
+  .decoded-table td:first-child { color: var(--muted); white-space: nowrap; width: 120px; }
+  .decoded-table td:last-child  { color: var(--text); word-break: break-all; }
+
+  /* Decoded row with hex mapping — hoverable */
+  .decoded-table tr[data-hbc] { cursor: crosshair; }
+  .decoded-table tr[data-hbc]:hover td:first-child { color: var(--blue); }
+  .decoded-table tr[data-hbc]:hover { background: rgba(88,166,255,0.05); }
+
+  /* Hex byte hover-highlight (triggered by decoded row hover) */
+  .hb.hb-hover {
+    outline: 2px solid var(--blue);
+    background: rgba(88,166,255,0.45) !important;
+    color: #fff !important;
+    position: relative;
+    z-index: 2;
+    border-radius: 3px;
+  }
+
+  .copy-row {
+    display: flex;
+    gap: 6px;
+    margin-top: 8px;
+  }
+
+  /* ── Bottom bar ── */
+  #bottom {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    border-top: 1px solid var(--border);
+    background: var(--panel);
+    overflow: hidden;
+    min-height: 0;
+  }
+
+  #hr-chart-panel {
+    display: flex;
+    flex-direction: column;
+    border-right: 1px solid var(--border);
+    overflow: hidden;
+  }
+
+  .bottom-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 4px 10px;
+    border-bottom: 1px solid var(--border);
+    font-size: 10px;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    flex-shrink: 0;
+  }
+  .bottom-header .hr-stats {
+    display: flex;
+    gap: 10px;
+    font-size: 10px;
+    color: var(--muted);
+  }
+  .bottom-header .hr-stats span { color: var(--text); }
+
+  #hr-chart-wrapper {
+    flex: 1;
+    position: relative;
+    padding: 4px 8px 4px;
+    min-height: 0;
+  }
+
+  #console-panel {
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  #console-output {
+    flex: 1;
+    overflow-y: auto;
+    padding: 6px 10px;
+    color: #3fb950;
+    font-size: 11px;
+    line-height: 1.5;
+    background: #0a0f14;
+    white-space: pre-wrap;
+    word-break: break-all;
+  }
+  #console-output::-webkit-scrollbar { width: 4px; }
+  #console-output::-webkit-scrollbar-thumb { background: var(--border); }
+
+  /* Coverage heat map */
+  .cov-cell {
+    width: 14px;
+    height: 14px;
+    border-radius: 3px;
+    background: #161b22;
+    border: 1px solid #30363d;
+    cursor: default;
+  }
+  .cov-cell:hover { outline: 1px solid var(--blue); }
+
+  /* ── Command sender ── */
+  #cmd-panel {
+    display: none;
+    position: fixed;
+    top: 50px;
+    right: 12px;
+    z-index: 500;
+    background: #161b22;
+    border: 1px solid #30363d;
+    border-radius: 8px;
+    padding: 14px 16px;
+    gap: 8px;
+    flex-direction: column;
+    min-width: 340px;
+    box-shadow: 0 8px 24px rgba(0,0,0,.5);
+  }
+  #cmd-panel.open { display: flex; }
+  #cmd-panel label { font-size: 10px; color: var(--muted); }
+  #cmd-select, #cmd-payload {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    color: var(--text);
+    font: inherit;
+    font-size: 11px;
+    border-radius: 4px;
+    padding: 3px 6px;
+  }
+  #cmd-select:focus, #cmd-payload:focus { outline: none; border-color: var(--blue); }
+  #cmd-payload { width: 120px; }
+
+  /* ── Empty state ── */
+  #empty-state {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    height: 100%;
+    color: var(--muted);
+    gap: 8px;
+  }
+  #empty-state .icon { font-size: 32px; }
+  #empty-state p { font-size: 12px; }
+
+  /* ── Misc ── */
+  .hr-zone-1 { color: #58a6ff; }
+  .hr-zone-2 { color: var(--green); }
+  .hr-zone-3 { color: var(--yellow); }
+  .hr-zone-4 { color: var(--red); }
+
+  select option { background: var(--panel); }
+
+  #autoscroll-label { font-size: 10px; color: var(--muted); display: flex; align-items: center; gap: 4px; }
+</style>
+</head>
+<body>
+<div id="app">
+
+  <!-- ── TOPBAR ── -->
+  <header id="topbar">
+    <span class="brand">WHOOP BLE</span>
+    <div class="divider"></div>
+
+    <div class="stat-block">
+      <span id="hr-val" class="stat-val hr-zone-2">--</span>
+      <span class="stat-label">BPM</span>
+    </div>
+
+    <div class="stat-block" title="RMSSD computed from RR intervals (rolling 60s)">
+      <span id="hrv-val" class="stat-val" style="color:var(--green)">--</span>
+      <span class="stat-label">HRV ms</span>
+    </div>
+
+    <div class="stat-block" title="Resting HR — 5th percentile of last 5 min BPM">
+      <span id="rhr-val" class="stat-val" style="color:var(--blue)">--</span>
+      <span class="stat-label">RHR</span>
+    </div>
+
+    <div class="stat-block">
+      <span id="battery-val" class="stat-val" style="color:var(--yellow)">--</span>
+      <span class="stat-label">BATT %</span>
+    </div>
+
+    <div class="stat-block">
+      <span id="temp-val" class="stat-val" style="color:var(--orange)">--</span>
+      <span class="stat-label">SKIN °C</span>
+    </div>
+
+    <div class="stat-block" id="rtc-block" title="Band RTC — GET_CLOCK response">
+      <span id="rtc-val" class="stat-val" style="color:var(--muted);font-size:9px">--</span>
+      <span class="stat-label">RTC</span>
+    </div>
+
+    <div style="display:flex;align-items:center;gap:4px;font-size:11px;color:var(--muted)">
+      <span class="dot wrist-unknown" id="wrist-dot"></span>
+      <span id="wrist-label">WRIST?</span>
+    </div>
+
+    <div class="divider"></div>
+
+    <div id="pkt-counts" style="display:flex;gap:8px;flex-wrap:wrap;font-size:10px;color:var(--muted)"></div>
+
+    <div class="divider"></div>
+    <div style="font-size:10px;color:var(--muted);white-space:nowrap">
+      <span id="total-count" style="color:#e6edf3;font-weight:600">0</span> pkts
+      &nbsp;·&nbsp;
+      <span id="session-start" style="font-family:monospace">--:--:--</span>
+    </div>
+    <div class="divider"></div>
+    <div id="bps-display" style="font-size:10px;color:var(--muted)">0 B/s</div>
+
+    <div style="margin-left:auto;display:flex;align-items:center;gap:8px">
+      <div id="ws-status">
+        <span class="dot disconnected" id="ws-dot"></span>
+        <span id="ws-label">Disconnected</span>
+      </div>
+      <div id="ble-status" style="display:flex;align-items:center;gap:4px;font-size:11px;color:var(--muted)">
+        <span class="dot ble-off" id="ble-dot"></span>
+        <span id="ble-label">BLE off</span>
+      </div>
+      <button class="btn primary" id="scan-btn" onclick="startScan()">Scan</button>
+      <button class="btn" onclick="clearAll()">Clear</button>
+      <button class="btn" onclick="exportJSON()">Export</button>
+      <button class="btn" onclick="openCoverage()">Coverage</button>
+      <button class="btn" id="cmd-toggle-btn" onclick="toggleCmdPanel()">Commands</button>
+    </div>
+  </header>
+
+  <!-- ── COVERAGE MODAL ── -->
+  <div id="coverage-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:1000;align-items:center;justify-content:center">
+    <div style="background:#161b22;border:1px solid #30363d;border-radius:8px;padding:20px;min-width:820px;max-width:90vw">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
+        <span style="font-weight:600;font-size:14px">Data coverage — HR records per day (last 100 days)</span>
+        <button class="btn" onclick="closeCoverage()" style="padding:2px 8px">✕</button>
+      </div>
+      <div id="coverage-stats" style="font-size:11px;color:var(--muted);margin-bottom:10px">Loading…</div>
+
+      <!-- Calendar grid: 7 rows (days of week) × N columns (weeks) -->
+      <div style="display:flex;gap:6px;font-family:monospace;font-size:10px;color:var(--muted)">
+        <!-- Day-of-week labels (left column) -->
+        <div style="display:grid;grid-template-rows:14px repeat(7, 16px);gap:3px;padding-top:2px">
+          <div></div><!-- spacer for month row -->
+          <div>Mon</div>
+          <div></div>
+          <div>Wed</div>
+          <div></div>
+          <div>Fri</div>
+          <div></div>
+          <div>Sun</div>
+        </div>
+        <!-- Main calendar (months row + weeks grid) -->
+        <div style="flex:1">
+          <div id="coverage-months" style="display:grid;grid-template-columns:repeat(15, 1fr);height:14px;font-size:10px;color:var(--muted);margin-bottom:3px"></div>
+          <div id="coverage-grid" style="display:grid;grid-template-columns:repeat(15, 1fr);grid-template-rows:repeat(7, 16px);gap:3px;grid-auto-flow:column"></div>
+        </div>
+      </div>
+
+      <div style="display:flex;justify-content:space-between;align-items:center;font-size:10px;color:var(--muted);margin-top:14px;padding-top:10px;border-top:1px solid var(--border)">
+        <span>Less</span>
+        <div style="display:flex;gap:3px;align-items:center">
+          <div class="cov-cell" style="background:#161b22;border:1px solid #30363d"></div>
+          <div class="cov-cell" style="background:rgba(63,185,80,0.2)"></div>
+          <div class="cov-cell" style="background:rgba(63,185,80,0.4)"></div>
+          <div class="cov-cell" style="background:rgba(63,185,80,0.7)"></div>
+          <div class="cov-cell" style="background:#3fb950"></div>
+        </div>
+        <span>More</span>
+        <span id="coverage-hover" style="margin-left:20px;color:var(--text);font-family:monospace;min-width:200px">Hover a cell for date + count</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── SCAN MODAL ── -->
+  <div id="scan-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:1000;align-items:center;justify-content:center">
+    <div style="background:#161b22;border:1px solid #30363d;border-radius:8px;padding:20px;min-width:420px;max-width:560px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
+        <span style="font-weight:600;font-size:14px">BLE Scan</span>
+        <button class="btn" onclick="closeScanModal()" style="padding:2px 8px">✕</button>
+      </div>
+      <div id="scan-status" style="font-size:12px;color:var(--muted);margin-bottom:10px">Press Scan to discover nearby BLE devices.</div>
+      <div id="scan-results" style="max-height:320px;overflow-y:auto"></div>
+      <div style="margin-top:14px;display:flex;gap:8px;align-items:center">
+        <input id="manual-addr" placeholder="Or enter address manually…" style="flex:1;background:#0d1117;border:1px solid #30363d;border-radius:4px;padding:5px 8px;color:#e6edf3;font-size:12px;font-family:monospace">
+        <button class="btn primary" onclick="connectManual()">Connect</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── MAIN ── -->
+  <div id="main">
+
+    <!-- Left: Packet stream -->
+    <div id="stream-panel">
+      <div id="stream-toolbar">
+        <input id="search-box" type="text" placeholder="Search hex or decoded…" oninput="applyFilter()">
+
+        <label id="autoscroll-label">
+          <input type="checkbox" id="autoscroll-cb" checked> Auto-scroll
+        </label>
+
+        <div style="display:flex;gap:6px;flex-wrap:wrap;margin-left:4px" id="filter-row"></div>
+      </div>
+      <div id="stream-list">
+        <div id="empty-state">
+          <div class="icon">○</div>
+          <p>Waiting for packets…</p>
+          <p style="font-size:10px">Backend: ws://localhost:8766</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- Right: Detail panel -->
+    <div id="detail-panel">
+      <div id="detail-header">
+        <h3 id="detail-title">No packet selected</h3>
+        <span id="detail-source-badge"></span>
+      </div>
+      <div id="detail-content">
+        <p style="color:var(--muted);font-size:11px;padding:20px 0;text-align:center">
+          Click a packet row to inspect it
+        </p>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- ── BOTTOM ── -->
+  <div id="bottom">
+
+    <div id="hr-chart-panel">
+      <div class="bottom-header">
+        <span>Heart Rate (120s)</span>
+        <div class="hr-stats">
+          Min: <span id="hr-min">--</span>
+          Cur: <span id="hr-cur">--</span>
+          Max: <span id="hr-max">--</span>
+        </div>
+      </div>
+      <div id="hr-chart-wrapper">
+        <canvas id="hr-chart"></canvas>
+      </div>
+    </div>
+
+    <div id="console-panel">
+      <div class="bottom-header">
+        <span>Console Log</span>
+        <div style="display:flex;gap:4px">
+          <button class="btn" id="console-copy-btn" style="padding:1px 6px;font-size:9px" onclick="copyConsole()">Copy</button>
+          <button class="btn" style="padding:1px 6px;font-size:9px" onclick="clearConsole()">Clear</button>
+        </div>
+      </div>
+      <div id="console-output">Ready.\n</div>
+    </div>
+
+  </div>
+
+</div>
+
+<!-- Command panel (outside grid, overlaid at bottom) -->
+<div id="cmd-panel">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
+    <span style="font-weight:600;font-size:13px">Send Command</span>
+    <button class="btn" onclick="toggleCmdPanel()" style="padding:2px 8px">✕</button>
+  </div>
+  <div style="display:flex;gap:6px;align-items:center">
+    <label style="white-space:nowrap">Command</label>
+    <select id="cmd-select" style="flex:1;background:var(--bg);border:1px solid var(--border);color:var(--text);font:inherit;font-size:11px;border-radius:4px;padding:4px 6px">
+      <option value="SEND_HISTORICAL_DATA">SEND_HISTORICAL_DATA</option>
+      <option value="GET_CLOCK">GET_CLOCK (0x0B)</option>
+      <option value="SET_READ_POINTER">SET_READ_POINTER</option>
+      <option value="GET_DATA_RANGE">GET_DATA_RANGE</option>
+      <option value="ABORT_HISTORICAL_TRANSMITS">ABORT</option>
+      <option value="custom">Custom hex cmd</option>
+    </select>
+  </div>
+  <div style="display:flex;gap:6px;align-items:center">
+    <label style="white-space:nowrap">Payload hex</label>
+    <input id="cmd-payload" type="text" value="00" placeholder="hex bytes…" style="flex:1;background:var(--bg);border:1px solid var(--border);color:var(--text);font:inherit;font-size:11px;border-radius:4px;padding:4px 6px;font-family:monospace">
+    <button class="btn primary" onclick="sendCommand()">Send</button>
+  </div>
+  <div style="border-top:1px solid var(--border);padding-top:8px;margin-top:2px">
+    <div style="display:flex;gap:6px;align-items:center;margin-bottom:6px">
+      <button class="btn primary" onclick="sendSetClock()" style="flex:1" title="Sends SET_CLOCK (0x0A) with current Unix timestamp. Fire-and-forget. Run while wearing band, then drain to verify.">Fix RTC Clock</button>
+      <button class="btn" onclick="sendGetClockSeq()" style="flex:1" title="Sends SEND_HISTORICAL_DATA then GET_CLOCK — response appears in RTC display above">Check RTC</button>
+    </div>
+    <div style="display:flex;gap:6px;align-items:center">
+      <label style="white-space:nowrap">Raw frame</label>
+      <input id="cmd-raw-hex" type="text" placeholder="aa…" style="flex:1;background:var(--bg);border:1px solid var(--border);color:var(--text);font:inherit;font-size:11px;border-radius:4px;padding:4px 6px;font-family:monospace">
+      <button class="btn" onclick="sendRaw()">Send</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// ─────────────────────────────────────────────────────────
+// Constants
+// ─────────────────────────────────────────────────────────
+
+const WS_URL = 'ws://localhost:8766';
+const MAX_PACKETS = 2000;
+const HR_WINDOW_SEC = 120;
+
+const TYPE_COLORS = {
+  HISTORICAL_DATA:    { color: '#3fb950', bg: 'rgba(63,185,80,0.15)' },
+  METADATA:           { color: '#bc8cff', bg: 'rgba(188,140,255,0.15)' },
+  EVENT:              { color: '#f0883e', bg: 'rgba(240,136,62,0.15)' },
+  CONSOLE_LOGS:       { color: '#8b949e', bg: 'rgba(139,148,158,0.15)' },
+  COMMAND_RESPONSE:   { color: '#58a6ff', bg: 'rgba(88,166,255,0.15)' },
+  REALTIME_DATA:      { color: '#39d353', bg: 'rgba(57,211,83,0.15)' },
+  REALTIME_RAW_DATA:  { color: '#39d353', bg: 'rgba(57,211,83,0.1)' },
+  HR_SERVICE:         { color: '#f85149', bg: 'rgba(248,81,73,0.15)' },
+  COMMAND:            { color: '#d29922', bg: 'rgba(210,153,34,0.15)' },
+  SYSTEM:             { color: '#d29922', bg: 'rgba(210,153,34,0.1)' },
+  CONNECTED:          { color: '#3fb950', bg: 'rgba(63,185,80,0.1)' },
+  BLE_CONNECTED:      { color: '#3fb950', bg: 'rgba(63,185,80,0.1)' },
+  BLE_DISCONNECTED:   { color: '#f85149', bg: 'rgba(248,81,73,0.1)' },
+  STATS:              { color: '#8b949e', bg: 'rgba(139,148,158,0.1)' },
+  UNKNOWN:            { color: '#e6edf3', bg: 'rgba(230,237,243,0.08)' },
+};
+
+const FILTER_TYPES = [
+  'HISTORICAL_DATA','METADATA','EVENT','CONSOLE_LOGS',
+  'COMMAND_RESPONSE','REALTIME_DATA','REALTIME_RAW_DATA','HR_SERVICE','COMMAND',
+  'SYSTEM'
+];
+
+// Map decoded field keys → hex byte CSS class for hover-highlight
+const DECODE_KEY_TO_HBC = {
+  // HISTORICAL_DATA
+  timestamp:       'hb-ts',
+  timestamp_iso:   'hb-ts',
+  hr:              'hb-hr',
+  rr_ms:           'hb-rr',
+  rr_count:        'hb-rr-cnt',
+  accel:           'hb-accel',
+  subsec:          'hb-subsec',
+  // METADATA
+  start_offset:    'hb-start',
+  end_offset:      'hb-end',
+  trim_offset:     'hb-trim',
+  // HR_SERVICE
+  hr_bpm:          'hb-hr',
+  // Shared
+  seq:             'hb-seq',
+};
+
+// Hex byte field annotations per packet type
+const FIELD_MAPS = {
+  HISTORICAL_DATA: (len) => {
+    const m = {};
+    for (let i = 0; i <= 3; i++)  m[i] = { cls: 'hb-seq',    tip: `seq[${i}]` };
+    for (let i = 4; i <= 7; i++)  m[i] = { cls: 'hb-ts',     tip: `ts[${i-4}]` };
+    m[8]  = { cls: 'hb-subsec', tip: 'subsec[0]' };
+    m[9]  = { cls: 'hb-subsec', tip: 'subsec[1]' };
+    m[14] = { cls: 'hb-hr',    tip: 'heart_rate' };
+    m[15] = { cls: 'hb-rr-cnt',tip: 'rr_count' };
+    for (let i = 16; i <= 23; i++) m[i] = { cls: 'hb-rr', tip: `rr[${i-16}]` };
+    for (let i = 33; i <= 44; i++) m[i] = { cls: 'hb-accel', tip: `accel[${i-33}]` };
+    return m;
+  },
+  // Standard BLE Heart Rate Measurement (UUID 0x2A37)
+  // flags byte: bit0=0 → 8-bit HR; bit0=1 → 16-bit HR; bit4=sensor contact
+  // RR intervals: uint16 LE, units = 1/1024 sec (convert ×1000/1024 → ms)
+  // Packet length varies: 2 bytes min + 2 bytes per RR interval captured
+  HR_SERVICE: (len) => {
+    const m = {};
+    m[0] = { cls: 'hb-flags', tip: 'flags (bit0=HR16bit, bit4=sensor_contact)' };
+    // Determine HR size from flags in actual bytes — we map statically for 8-bit (0x10 flags)
+    m[1] = { cls: 'hb-hr', tip: 'hr_bpm (8-bit)' };
+    // Remaining bytes are RR pairs (uint16 LE each, units: 1/1024 sec → ×1000/1024 = ms)
+    let rrIdx = 0;
+    for (let i = 2; i + 1 < len; i += 2) {
+      m[i]   = { cls: 'hb-rr', tip: `rr[${rrIdx}] lo  (uint16LE ÷1024×1000 = ms)` };
+      m[i+1] = { cls: 'hb-rr', tip: `rr[${rrIdx}] hi` };
+      rrIdx++;
+    }
+    return m;
+  },
+  METADATA: () => {
+    const m = {};
+    for (let i = 0; i <= 3; i++)  m[i] = { cls: 'hb-seq',   tip: `seq[${i}]` };
+    for (let i = 4; i <= 7; i++)  m[i] = { cls: 'hb-start', tip: `start_offset[${i-4}]` };
+    for (let i = 8; i <= 11; i++) m[i] = { cls: 'hb-end',   tip: `end_offset[${i-8}]` };
+    for (let i = 10; i <= 13; i++) m[i] = { cls: 'hb-trim', tip: `trim_offset[${i-10}]` };
+    return m;
+  },
+};
+
+// ─────────────────────────────────────────────────────────
+// State
+// ─────────────────────────────────────────────────────────
+
+let ws = null;
+let wsConnected = false;
+const SESSION_START = new Date();
+document.getElementById('session-start').textContent = SESSION_START.toLocaleTimeString();
+let packets = [];           // all received packets
+let filteredIndices = [];   // indices into packets[] matching current filter
+let selectedIdx = null;     // index in packets[]
+let filterEnabled = {};     // type → boolean
+let searchQuery = '';
+let hrHistory = [];         // { t: Date, bpm: number }[]
+let rrHistory = [];         // { t: Date, ms: number }[] — for HRV
+const HRV_WINDOW_MS = 60_000;   // rolling RMSSD over 60s
+const RHR_WINDOW_MS = 5 * 60_000;  // 5th-percentile over 5 min
+
+function computeHRV() {
+  const now = Date.now();
+  rrHistory = rrHistory.filter(d => d.t >= now - HRV_WINDOW_MS);
+  if (rrHistory.length < 5) return null;
+  // RMSSD = sqrt(mean of squared successive differences)
+  let sumSq = 0, n = 0;
+  for (let i = 1; i < rrHistory.length; i++) {
+    const diff = rrHistory[i].ms - rrHistory[i-1].ms;
+    sumSq += diff * diff;
+    n++;
+  }
+  return n > 0 ? Math.sqrt(sumSq / n) : null;
+}
+
+function computeRHR() {
+  const now = Date.now();
+  const recent = hrHistory.filter(d => d.t >= now - RHR_WINDOW_MS);
+  if (recent.length < 10) return null;
+  const sorted = recent.map(d => d.bpm).sort((a,b) => a - b);
+  // 5th percentile
+  return sorted[Math.floor(sorted.length * 0.05)];
+}
+
+function updateHRVRHR() {
+  const hrv = computeHRV();
+  const rhr = computeRHR();
+  const hrvEl = document.getElementById('hrv-val');
+  const rhrEl = document.getElementById('rhr-val');
+  if (hrvEl) hrvEl.textContent = hrv !== null ? hrv.toFixed(0) : '--';
+  if (rhrEl) rhrEl.textContent = rhr !== null ? rhr : '--';
+}
+let pktCounts = {};
+let bytesRecent = 0;
+let bpsTimer = null;
+let reconnectTimer = null;
+
+// ─────────────────────────────────────────────────────────
+// Init filter toggles
+// ─────────────────────────────────────────────────────────
+// Decoded summary + undecoded detection
+// ─────────────────────────────────────────────────────────
+
+function decodedSummary(type, decoded, raw) {
+  if (decoded.error) return `⚠ ${decoded.error}`;
+  switch (type) {
+    case 'HR_SERVICE': {
+      let s = decoded.hr_bpm != null ? `HR=${decoded.hr_bpm} bpm` : '';
+      if (decoded.rr_ms?.length) s += `  RR=[${decoded.rr_ms.join(',')}ms]`;
+      if (!s) s = `raw: ${raw.substring(0,16)}`;
+      return s;
+    }
+    case 'HISTORICAL_DATA': {
+      let s = decoded.hr != null ? `HR=${decoded.hr} bpm` : '';
+      if (decoded.timestamp_iso) s += `  ${decoded.timestamp_iso.slice(0,19)}Z`;
+      if (decoded.rr_ms?.length) s += `  RR=[${decoded.rr_ms.join(',')}ms]`;
+      if (decoded.skin_temp_c != null) s += `  temp=${decoded.skin_temp_c}°C`;
+      return s || `raw: ${raw.substring(0,16)}`;
+    }
+    case 'EVENT': {
+      const evt = decoded.event || decoded.event_type;
+      let s = evt ? String(evt) : '';
+      if (decoded.battery_pct != null) s += `  bat=${decoded.battery_pct}%`;
+      if (decoded.skin_temp_c != null) s += `  temp=${decoded.skin_temp_c}°C`;
+      return s || `raw: ${raw.substring(0,16)}`;
+    }
+    case 'METADATA': {
+      let s = decoded.metadata_type || '';
+      if (decoded.trim_offset != null) s += `  trim=0x${decoded.trim_offset.toString(16).toUpperCase().padStart(8,'0')}`;
+      if (decoded.start_offset != null) s += `  start=0x${decoded.start_offset.toString(16).toUpperCase()}`;
+      return s || `raw: ${raw.substring(0,16)}`;
+    }
+    case 'CONSOLE_LOGS':
+      return decoded.console_text ? decoded.console_text.substring(0,60).replace(/\n/g,' ') : `raw: ${raw.substring(0,16)}`;
+    case 'COMMAND_RESPONSE':
+      return `cmd=${decoded.cmd_name || '?'}  data=${decoded.response_data_hex || raw.substring(0,16)}`;
+    case 'BATTERY_SERVICE':
+      return decoded.battery_pct != null ? `bat=${decoded.battery_pct}%` : `raw: ${raw.substring(0,16)}`;
+    default:
+      return raw.substring(0, 32) + (raw.length > 32 ? '…' : '');
+  }
+}
+
+function isPacketUndecoded(type, decoded) {
+  if (decoded.error) return true;
+  if (type === 'HR_SERVICE') return decoded.hr_bpm == null;
+  if (type === 'HISTORICAL_DATA') return decoded.hr == null && decoded.timestamp == null;
+  if (type === 'EVENT') return !decoded.event || decoded.event?.startsWith('unknown_');
+  if (type === 'METADATA') return !decoded.metadata_type || decoded.metadata_type?.startsWith('0x');
+  if (type === 'CONSOLE_LOGS') return !decoded.console_text;
+  if (type.startsWith('UNKNOWN')) return true;
+  return false;
+}
+
+let showOnlyUndecoded = false;
+
+// ─────────────────────────────────────────────────────────
+
+(function initFilters() {
+  const row = document.getElementById('filter-row');
+  // Undecoded-only toggle
+  const udLabel = document.createElement('label');
+  udLabel.className = 'filter-toggle';
+  udLabel.style.cssText = 'border:1px solid rgba(248,81,73,0.4);border-radius:4px;padding:1px 4px';
+  udLabel.innerHTML = `<input type="checkbox" id="undecoded-cb"><span style="color:#f85149;font-size:10px">?UNDECODED only</span>`;
+  udLabel.querySelector('input').addEventListener('change', e => {
+    showOnlyUndecoded = e.target.checked;
+    applyFilter();
+  });
+  row.appendChild(udLabel);
+
+  FILTER_TYPES.forEach(type => {
+    filterEnabled[type] = true;
+    const col = (TYPE_COLORS[type] || TYPE_COLORS.UNKNOWN).color;
+    const label = document.createElement('label');
+    label.className = 'filter-toggle';
+    label.innerHTML = `
+      <input type="checkbox" checked data-type="${type}">
+      <span class="badge" style="background:${(TYPE_COLORS[type]||TYPE_COLORS.UNKNOWN).bg};color:${col}">${type.replace('_',' ').substring(0,12)}</span>
+    `;
+    label.querySelector('input').addEventListener('change', e => {
+      filterEnabled[type] = e.target.checked;
+      applyFilter();
+    });
+    row.appendChild(label);
+  });
+})();
+
+// ─────────────────────────────────────────────────────────
+// HR Chart (Chart.js)
+// ─────────────────────────────────────────────────────────
+
+const ctx = document.getElementById('hr-chart').getContext('2d');
+Chart.defaults.color = '#8b949e';
+
+const hrChart = new Chart(ctx, {
+  type: 'line',
+  data: {
+    labels: [],
+    datasets: [{
+      label: 'BPM',
+      data: [],
+      borderColor: '#f85149',
+      backgroundColor: 'rgba(248,81,73,0.08)',
+      borderWidth: 1.5,
+      pointRadius: 0,
+      tension: 0.3,
+      fill: true,
+    }]
+  },
+  options: {
+    responsive: true,
+    maintainAspectRatio: false,
+    animation: false,
+    interaction: { mode: 'nearest', intersect: false },
+    plugins: {
+      legend: { display: false },
+      tooltip: {
+        backgroundColor: '#161b22',
+        borderColor: '#30363d',
+        borderWidth: 1,
+        callbacks: {
+          label: ctx => `${ctx.parsed.y} BPM`,
+        }
+      }
+    },
+    scales: {
+      x: {
+        display: false,
+        type: 'category',
+      },
+      y: {
+        grid: { color: 'rgba(48,54,61,0.5)' },
+        ticks: { font: { size: 10 } },
+        min: 40,
+        suggestedMax: 160,
+      }
+    }
+  }
+});
+
+function updateHRChart() {
+  const now = Date.now();
+  const cutoff = now - HR_WINDOW_SEC * 1000;
+  hrHistory = hrHistory.filter(d => d.t >= cutoff);
+
+  hrChart.data.labels = hrHistory.map(d => {
+    const s = Math.floor((now - d.t) / 1000);
+    return `-${s}s`;
+  });
+  hrChart.data.datasets[0].data = hrHistory.map(d => d.bpm);
+
+  // Dynamic color by zone
+  const cur = hrHistory.length ? hrHistory[hrHistory.length - 1].bpm : null;
+  if (cur !== null) {
+    const col = hrZoneColor(cur);
+    hrChart.data.datasets[0].borderColor = col;
+    hrChart.data.datasets[0].backgroundColor = col.replace(')', ',0.08)').replace('rgb', 'rgba');
+  }
+
+  hrChart.update('none');
+
+  if (hrHistory.length) {
+    const bpms = hrHistory.map(d => d.bpm);
+    const mn = Math.min(...bpms), mx = Math.max(...bpms);
+    document.getElementById('hr-min').textContent = mn;
+    document.getElementById('hr-max').textContent = mx;
+    document.getElementById('hr-cur').textContent = cur;
+  }
+}
+
+function hrZoneColor(bpm) {
+  if (bpm < 60)  return '#58a6ff';
+  if (bpm < 100) return '#3fb950';
+  if (bpm < 140) return '#d29922';
+  return '#f85149';
+}
+
+function hrZoneClass(bpm) {
+  if (bpm < 60)  return 'hr-zone-1';
+  if (bpm < 100) return 'hr-zone-2';
+  if (bpm < 140) return 'hr-zone-3';
+  return 'hr-zone-4';
+}
+
+// ─────────────────────────────────────────────────────────
+// WebSocket
+// ─────────────────────────────────────────────────────────
+
+function connectWS() {
+  if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
+  ws = new WebSocket(WS_URL);
+
+  ws.addEventListener('open', () => {
+    wsConnected = true;
+    setWSStatus(true);
+    clearTimeout(reconnectTimer);
+  });
+
+  ws.addEventListener('message', e => {
+    try {
+      const msg = JSON.parse(e.data);
+      handlePacket(msg);
+    } catch (err) {
+      console.warn('Bad WS message:', err);
+    }
+  });
+
+  ws.addEventListener('close', () => {
+    wsConnected = false;
+    setWSStatus(false);
+    scheduleReconnect();
+  });
+
+  ws.addEventListener('error', () => {
+    ws.close();
+  });
+}
+
+function scheduleReconnect() {
+  clearTimeout(reconnectTimer);
+  reconnectTimer = setTimeout(connectWS, 3000);
+}
+
+function setWSStatus(connected) {
+  document.getElementById('ws-dot').className = 'dot ' + (connected ? 'connected' : 'disconnected');
+  document.getElementById('ws-label').textContent = connected ? 'WS Connected' : 'WS Disconnected';
+}
+
+// ─────────────────────────────────────────────────────────
+// Packet handling
+// ─────────────────────────────────────────────────────────
+
+function handlePacket(msg) {
+  const type = msg.parsed?.type || 'UNKNOWN';
+  const decoded = msg.parsed?.decoded || {};
+
+  // Handle system / meta packets
+  if (type === 'SCAN_STARTED') {
+    document.getElementById('scan-status').textContent = `Scanning for ${decoded.duration}s…`;
+    document.getElementById('scan-results').innerHTML = '<div style="color:var(--muted);font-size:12px;padding:8px 0">Scanning…</div>';
+    return;
+  }
+  if (type === 'SCAN_RESULTS') {
+    renderScanResults(decoded.devices || []);
+    return;
+  }
+  if (type === 'BLE_CONNECTED') {
+    setBLEStatus(true);
+    appendConsole(`[BLE] Connected to ${decoded.address || 'Whoop'}\n`);
+    return;
+  }
+  if (type === 'BLE_DISCONNECTED') {
+    setBLEStatus(false);
+    appendConsole(`[BLE] Disconnected\n`);
+    return;
+  }
+  if (type === 'CONNECTED') {
+    appendConsole('[WS] Monitor backend connected\n');
+    if (decoded.packet_counts) updateCounts(decoded.packet_counts);
+    // Apply last-known sensor values so topbar shows immediately
+    if (decoded.last_known) {
+      const lk = decoded.last_known;
+      if (lk.battery_pct != null) document.getElementById('battery-val').textContent = lk.battery_pct.toFixed(1);
+      if (lk.skin_temp_c != null) document.getElementById('temp-val').textContent = lk.skin_temp_c.toFixed(1);
+      if (lk.rtc_iso) {
+        const el = document.getElementById('rtc-val');
+        el.textContent = lk.rtc_iso.substring(0, 10);
+        el.style.color = 'var(--green)';
+        el.title = `RTC = ${lk.rtc_val} (${lk.rtc_iso})`;
+      } else if (lk.rtc_val) {
+        const el = document.getElementById('rtc-val');
+        el.textContent = lk.rtc_val;
+        el.style.color = 'var(--red)';
+        el.title = `RTC = ${lk.rtc_val} — INVALID`;
+      }
+      if (lk.wrist === 'on') setWristStatus('on');
+      else if (lk.wrist === 'off') setWristStatus('off');
+    }
+    return;
+  }
+  if (type === 'STATS') {
+    if (decoded.packet_counts) updateCounts(decoded.packet_counts);
+    if (decoded.bytes_per_sec !== undefined) updateBPS(decoded.bytes_per_sec);
+    return;
+  }
+
+  // Update HR
+  if (type === 'HR_SERVICE' && decoded.hr_bpm) {
+    const bpm = decoded.hr_bpm;
+    hrHistory.push({ t: Date.now(), bpm });
+    updateHRChart();
+    const el = document.getElementById('hr-val');
+    el.textContent = bpm;
+    el.className = 'stat-val ' + hrZoneClass(bpm);
+    document.getElementById('hr-cur').textContent = bpm;
+    // RR intervals for HRV
+    if (decoded.rr_ms && decoded.rr_ms.length) {
+      const now = Date.now();
+      decoded.rr_ms.forEach(rr => rrHistory.push({ t: now, ms: rr }));
+    }
+    updateHRVRHR();
+  }
+
+  // Update HR from historical records
+  if (type === 'HISTORICAL_DATA' && decoded.hr) {
+    hrHistory.push({ t: decoded.timestamp ? decoded.timestamp * 1000 : Date.now(), bpm: decoded.hr });
+    if (hrHistory.length > 1000) hrHistory.shift();
+    // RR from historical too
+    if (decoded.rr_ms && decoded.rr_ms.length) {
+      const t = decoded.timestamp ? decoded.timestamp * 1000 : Date.now();
+      decoded.rr_ms.forEach(rr => rrHistory.push({ t, ms: rr }));
+    }
+    updateHRVRHR();
+    updateHRChart();
+  }
+
+  // Update battery / temp / wrist from events
+  if (type === 'EVENT') {
+    if (decoded.battery_pct !== undefined) {
+      document.getElementById('battery-val').textContent = decoded.battery_pct.toFixed(1);
+    }
+    if (decoded.skin_temp_c !== undefined) {
+      document.getElementById('temp-val').textContent = decoded.skin_temp_c.toFixed(1);
+    }
+    if (decoded.event === 'wrist_on')  setWristStatus('on');
+    if (decoded.event === 'wrist_off') setWristStatus('off');
+  }
+
+  // Update RTC display from GET_CLOCK response
+  if (type === 'COMMAND_RESPONSE' && decoded.rtc_val !== undefined) {
+    const el = document.getElementById('rtc-val');
+    if (decoded.rtc_iso) {
+      el.textContent = decoded.rtc_iso.substring(0, 10);
+      el.style.color = 'var(--green)';
+      el.title = `RTC = ${decoded.rtc_val} (${decoded.rtc_iso})`;
+    } else {
+      el.textContent = decoded.rtc_val;
+      el.style.color = 'var(--red)';
+      el.title = `RTC = ${decoded.rtc_val} — INVALID (not a Unix timestamp)`;
+    }
+  }
+  if (type === 'SET_CLOCK_SENT') {
+    const el = document.getElementById('rtc-val');
+    el.textContent = 'sent…';
+    el.style.color = 'var(--yellow)';
+    el.title = `SET_CLOCK sent: ${decoded.iso}`;
+    appendConsole(`[RTC] SET_CLOCK sent: ${decoded.iso} (${decoded.unix_ts})\n`);
+  }
+
+  // Console logs
+  if (type === 'CONSOLE_LOGS' && decoded.console_text) {
+    appendConsole(decoded.console_text);
+  }
+
+  // Count
+  const src = msg.source || 'UNKNOWN';
+  pktCounts[src] = (pktCounts[src] || 0) + 1;
+  updateCounts(pktCounts);
+
+  // Track bytes
+  bytesRecent += (msg.raw?.length || 0) / 2;
+
+  // Store packet
+  packets.push(msg);
+  document.getElementById('total-count').textContent = packets.length.toLocaleString();
+  if (packets.length > MAX_PACKETS + 200) {
+    packets.splice(0, 200);
+    // If selected was in pruned range, clear
+    if (selectedIdx !== null && selectedIdx < 200) {
+      selectedIdx = null;
+      renderDetail(null);
+    } else if (selectedIdx !== null) {
+      selectedIdx -= 200;
+    }
+  }
+
+  // Append to stream if passes filter
+  const visible = typeVisible(type, null) && (!showOnlyUndecoded || isPacketUndecoded(type, msg.parsed?.decoded || {})) && matchesSearch(msg);
+  if (visible) {
+    const idx = packets.length - 1;
+    appendStreamRow(msg, idx);
+  }
+}
+
+// ─────────────────────────────────────────────────────────
+// Stream DOM
+// ─────────────────────────────────────────────────────────
+
+function appendStreamRow(msg, idx) {
+  const list = document.getElementById('stream-list');
+  const empty = document.getElementById('empty-state');
+  if (empty) empty.remove();
+
+  const type = msg.parsed?.type || 'UNKNOWN';
+  const src  = msg.source || 'UNKNOWN';
+  const col  = TYPE_COLORS[type] || TYPE_COLORS.UNKNOWN;
+  const srcCol = TYPE_COLORS[src] || TYPE_COLORS.UNKNOWN;
+
+  const ts = msg.ts ? msg.ts.slice(11, 23) : '';
+  const decoded = msg.parsed?.decoded || {};
+  const preview = decodedSummary(type, decoded, msg.raw || '');
+  const isUndecoded = isPacketUndecoded(type, decoded);
+
+  const row = document.createElement('div');
+  row.className = 'pkt-row' + (isUndecoded ? ' pkt-undecoded' : '');
+  row.dataset.idx = idx;
+  row.dataset.type = type;
+  row.dataset.undecoded = isUndecoded ? '1' : '0';
+  row.innerHTML = `
+    <span class="pkt-ts">${ts}</span>
+    <span class="badge" style="background:${col.bg};color:${col.color}">${type.substring(0,10)}</span>
+    <span class="badge" style="background:${srcCol.bg};color:${srcCol.color};opacity:0.8">${src.substring(0,8)}</span>
+    ${isUndecoded ? '<span class="badge" style="background:rgba(248,81,73,0.15);color:#f85149;font-size:9px">?UNDECODED</span>' : ''}
+    <span class="pkt-preview">${preview}</span>
+  `;
+  row.addEventListener('click', () => selectPacket(idx, row));
+  list.appendChild(row);
+
+  // Auto-scroll
+  if (document.getElementById('autoscroll-cb').checked) {
+    list.scrollTop = list.scrollHeight;
+  }
+
+  // Enforce max DOM rows
+  const rows = list.querySelectorAll('.pkt-row');
+  if (rows.length > MAX_PACKETS) {
+    rows[0].remove();
+  }
+}
+
+function selectPacket(idx, rowEl) {
+  // Deselect old
+  document.querySelectorAll('.pkt-row.selected').forEach(r => r.classList.remove('selected'));
+  rowEl.classList.add('selected');
+  selectedIdx = idx;
+  renderDetail(packets[idx]);
+}
+
+// ─────────────────────────────────────────────────────────
+// Detail panel
+// ─────────────────────────────────────────────────────────
+
+function renderDetail(msg) {
+  const titleEl = document.getElementById('detail-title');
+  const badgeEl = document.getElementById('detail-source-badge');
+  const content = document.getElementById('detail-content');
+
+  if (!msg) {
+    titleEl.textContent = 'No packet selected';
+    badgeEl.innerHTML = '';
+    content.innerHTML = '<p style="color:var(--muted);font-size:11px;padding:20px 0;text-align:center">Click a packet row to inspect it</p>';
+    return;
+  }
+
+  const type = msg.parsed?.type || 'UNKNOWN';
+  const src  = msg.source || 'UNKNOWN';
+  const col  = TYPE_COLORS[type] || TYPE_COLORS.UNKNOWN;
+  const srcCol = TYPE_COLORS[src] || TYPE_COLORS.UNKNOWN;
+
+  titleEl.textContent = `${type}  seq=${msg.parsed?.seq ?? 'N/A'}`;
+  badgeEl.innerHTML = `
+    <span class="badge" style="background:${col.bg};color:${col.color}">${type}</span>
+    <span class="badge" style="background:${srcCol.bg};color:${srcCol.color};margin-left:4px">${src}</span>
+  `;
+
+  let html = '';
+
+  // Meta fields
+  html += `<div class="detail-section">
+    <h4>Packet Fields</h4>
+    <table class="decoded-table">
+      <tr><td>timestamp</td><td>${msg.ts || ''}</td></tr>
+      <tr><td>source</td><td>${src}</td></tr>
+      <tr><td>type</td><td>${msg.parsed?.type_hex || ''}</td></tr>
+      <tr><td>seq</td><td>${msg.parsed?.seq ?? 'N/A'}</td></tr>
+      <tr><td>cmd</td><td>${msg.parsed?.cmd_hex || ''}</td></tr>
+      <tr><td>raw bytes</td><td>${(msg.raw?.length || 0) / 2}</td></tr>
+    </table>
+  </div>`;
+
+  // Decoded values
+  const decoded = msg.parsed?.decoded || {};
+  const decodedKeys = Object.keys(decoded).filter(k => k !== '_raw' && k !== 'console_buffer_len');
+  if (decodedKeys.length) {
+    html += `<div class="detail-section"><h4>Decoded Values</h4><table class="decoded-table">`;
+    decodedKeys.forEach(k => {
+      let v = decoded[k];
+      if (Array.isArray(v)) v = JSON.stringify(v);
+      const hbc = DECODE_KEY_TO_HBC[k] || '';
+      const rowAttr = hbc ? ` data-hbc="${hbc}" title="Hover to highlight bytes"` : '';
+      html += `<tr${rowAttr}><td>${k}</td><td>${escHtml(String(v))}</td></tr>`;
+    });
+    html += `</table></div>`;
+  }
+
+  // Hex dump
+  const rawHex = msg.raw || msg.parsed?.data_hex || '';
+  if (rawHex.length) {
+    html += `<div class="detail-section"><h4>Hex Dump</h4>`;
+    html += renderHexDump(rawHex, type);
+    html += `</div>`;
+  }
+
+  // Copy buttons
+  html += `<div class="copy-row">
+    <button class="btn" onclick="copyHex()">Copy Hex</button>
+    <button class="btn" onclick="copyJSON()">Copy JSON</button>
+  </div>`;
+
+  content.innerHTML = html;
+
+  // Wire hover-to-highlight: decoded row ↔ hex bytes
+  content.querySelectorAll('tr[data-hbc]').forEach(row => {
+    const cls = row.dataset.hbc;
+    row.addEventListener('mouseenter', () => {
+      content.querySelectorAll(`.hb.${cls}`).forEach(b => b.classList.add('hb-hover'));
+    });
+    row.addEventListener('mouseleave', () => {
+      content.querySelectorAll(`.hb.${cls}`).forEach(b => b.classList.remove('hb-hover'));
+    });
+  });
+}
+
+function renderHexDump(hexStr, type) {
+  const bytes = hexStr.match(/.{1,2}/g) || [];
+  const fieldMap = FIELD_MAPS[type] ? FIELD_MAPS[type](bytes.length) : {};
+
+  let html = '<div class="hex-grid">';
+  for (let i = 0; i < bytes.length; i += 16) {
+    const rowBytes = bytes.slice(i, i + 16);
+    html += `<div class="hex-row"><span class="hex-offset">${i.toString(16).padStart(3, '0')}</span><span class="hex-bytes">`;
+    rowBytes.forEach((b, j) => {
+      const absIdx = i + j;
+      const fi = fieldMap[absIdx];
+      const cls = fi ? fi.cls : (absIdx % 2 === 0 ? '' : 'hb-dim');
+      const tip = fi ? fi.tip : `byte[${absIdx}]`;
+      const val = parseInt(b, 16);
+      const tipFull = `${tip} = 0x${b} (${val})`;
+      html += `<span class="hb ${cls}" data-tip="${escAttr(tipFull)}">${b}</span>`;
+    });
+    html += '</span></div>';
+  }
+  html += '</div>';
+  return html;
+}
+
+function copyHex() {
+  if (selectedIdx === null) return;
+  const msg = packets[selectedIdx];
+  navigator.clipboard.writeText(msg.raw || '').then(() => flashBtn('Copy Hex', 'Copied!'));
+}
+
+function copyJSON() {
+  if (selectedIdx === null) return;
+  const msg = packets[selectedIdx];
+  navigator.clipboard.writeText(JSON.stringify(msg, null, 2)).then(() => flashBtn('Copy JSON', 'Copied!'));
+}
+
+function flashBtn(orig, flash) {
+  const btns = document.querySelectorAll('.copy-row .btn');
+  btns.forEach(b => {
+    if (b.textContent === orig) {
+      b.textContent = flash;
+      setTimeout(() => b.textContent = orig, 1200);
+    }
+  });
+}
+
+// ─────────────────────────────────────────────────────────
+// Filter / Search
+// ─────────────────────────────────────────────────────────
+
+function typeVisible(type, row) {
+  if (filterEnabled[type] === false) return false;
+  if (type === 'REALTIME_RAW_DATA' && filterEnabled['REALTIME_DATA'] === false) return false;
+  if (showOnlyUndecoded && row?.dataset.undecoded !== '1') return false;
+  return true;
+}
+
+function matchesSearch(msg) {
+  if (!searchQuery) return true;
+  const q = searchQuery.toLowerCase();
+  const raw = (msg.raw || '').toLowerCase();
+  if (raw.includes(q)) return true;
+  const decoded = JSON.stringify(msg.parsed?.decoded || '').toLowerCase();
+  if (decoded.includes(q)) return true;
+  return false;
+}
+
+function applyFilter() {
+  searchQuery = document.getElementById('search-box').value.trim();
+  const list = document.getElementById('stream-list');
+  list.innerHTML = '';
+
+  const visible = [];
+  packets.forEach((msg, idx) => {
+    const type = msg.parsed?.type || 'UNKNOWN';
+    if (typeVisible(type, null) && (!showOnlyUndecoded || isPacketUndecoded(type, msg.parsed?.decoded || {})) && matchesSearch(msg)) {
+      visible.push(idx);
+    }
+  });
+
+  if (visible.length === 0) {
+    const empty = document.createElement('div');
+    empty.id = 'empty-state';
+    empty.innerHTML = '<div class="icon">○</div><p>No matching packets</p>';
+    list.appendChild(empty);
+    return;
+  }
+
+  // Render last MAX_PACKETS visible
+  const toRender = visible.slice(-MAX_PACKETS);
+  toRender.forEach(idx => appendStreamRow(packets[idx], idx));
+}
+
+// ─────────────────────────────────────────────────────────
+// Console
+// ─────────────────────────────────────────────────────────
+
+function appendConsole(text) {
+  const el = document.getElementById('console-output');
+  el.textContent += text;
+  el.scrollTop = el.scrollHeight;
+}
+
+function clearConsole() {
+  document.getElementById('console-output').textContent = '';
+}
+
+async function openCoverage() {
+  const modal = document.getElementById('coverage-modal');
+  const grid = document.getElementById('coverage-grid');
+  const monthsRow = document.getElementById('coverage-months');
+  const stats = document.getElementById('coverage-stats');
+  const hover = document.getElementById('coverage-hover');
+  modal.style.display = 'flex';
+  grid.innerHTML = '';
+  monthsRow.innerHTML = '';
+  stats.textContent = 'Loading…';
+
+  let days = [];
+  try {
+    const res = await fetch('/coverage.json');
+    const data = await res.json();
+    days = data.days || [];
+  } catch (e) {
+    stats.textContent = 'Failed to load coverage data: ' + e.message;
+    return;
+  }
+
+  const byDate = {};
+  days.forEach(d => byDate[d.date] = d.count);
+
+  // Build cells aligned to weeks (Mon-Sun). Cover ~15 weeks back from today.
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const NUM_WEEKS = 15;
+  // Find the Monday of the week 14 weeks ago
+  const start = new Date(today);
+  const dayOfWeek = (today.getDay() + 6) % 7; // 0 = Mon
+  start.setDate(today.getDate() - dayOfWeek - (NUM_WEEKS - 1) * 7);
+
+  const cells = [];
+  for (let w = 0; w < NUM_WEEKS; w++) {
+    for (let d = 0; d < 7; d++) {
+      const date = new Date(start);
+      date.setDate(start.getDate() + w * 7 + d);
+      const key = date.toISOString().slice(0, 10);
+      const future = date > today;
+      cells.push({
+        date: key,
+        count: byDate[key] || 0,
+        future,
+        col: w,
+        row: d,
+      });
+    }
+  }
+
+  // Color thresholds
+  const realCells = cells.filter(c => !c.future);
+  const max = Math.max(...realCells.map(c => c.count), 1);
+  function colorFor(c) {
+    if (c.future) return 'transparent';
+    if (c.count === 0) return '#161b22';
+    const ratio = c.count / max;
+    if (ratio < 0.25) return 'rgba(63,185,80,0.2)';
+    if (ratio < 0.5)  return 'rgba(63,185,80,0.4)';
+    if (ratio < 0.75) return 'rgba(63,185,80,0.7)';
+    return '#3fb950';
+  }
+
+  // Render cells (column-major: grid-auto-flow: column means we fill down each column first)
+  cells.forEach(c => {
+    const cell = document.createElement('div');
+    cell.className = 'cov-cell';
+    cell.style.background = colorFor(c);
+    cell.style.border = c.future ? 'none' : (c.count === 0 ? '1px solid #30363d' : 'none');
+    const dt = new Date(c.date + 'T00:00:00Z');
+    const dow = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'][c.row];
+    const label = c.future ? `${c.date} (future)` : `${dow} ${c.date}: ${c.count.toLocaleString()} records`;
+    cell.title = label;
+    cell.addEventListener('mouseenter', () => { hover.textContent = label; });
+    grid.appendChild(cell);
+  });
+
+  // Month labels — show month abbrev where each new month begins (in the first row of each week)
+  const monthNames = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  let lastMonth = -1;
+  for (let w = 0; w < NUM_WEEKS; w++) {
+    const monday = new Date(start);
+    monday.setDate(start.getDate() + w * 7);
+    const monthCell = document.createElement('div');
+    monthCell.style.textAlign = 'left';
+    monthCell.style.paddingLeft = '2px';
+    if (monday.getUTCMonth() !== lastMonth && w > 0) {
+      monthCell.textContent = monthNames[monday.getUTCMonth()];
+      lastMonth = monday.getUTCMonth();
+    } else if (w === 0) {
+      monthCell.textContent = monthNames[monday.getUTCMonth()];
+      lastMonth = monday.getUTCMonth();
+    }
+    monthsRow.appendChild(monthCell);
+  }
+
+  // Stats summary
+  const nonZero = realCells.filter(c => c.count > 0).length;
+  const total = realCells.reduce((s, c) => s + c.count, 0);
+  const gaps = realCells.filter(c => c.count === 0).length;
+  stats.textContent = `${nonZero}/${realCells.length} days with data · ${total.toLocaleString()} records total · ${gaps} day(s) missing · peak ${max.toLocaleString()}/day · range ${realCells[0].date} → ${realCells[realCells.length-1].date}`;
+}
+
+function closeCoverage() {
+  document.getElementById('coverage-modal').style.display = 'none';
+}
+
+function copyConsole() {
+  const text = document.getElementById('console-output').textContent;
+  navigator.clipboard.writeText(text).then(() => {
+    const btn = document.getElementById('console-copy-btn');
+    const orig = btn.textContent;
+    btn.textContent = 'Copied!';
+    setTimeout(() => { btn.textContent = orig; }, 1200);
+  });
+}
+
+// ─────────────────────────────────────────────────────────
+// Stats display
+// ─────────────────────────────────────────────────────────
+
+function updateCounts(counts) {
+  const el = document.getElementById('pkt-counts');
+  const sortedEntries = Object.entries(counts)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 8);
+  el.innerHTML = sortedEntries.map(([k, v]) => {
+    const col = (TYPE_COLORS[k] || TYPE_COLORS.UNKNOWN).color;
+    return `<span style="color:${col}">${k.substring(0,6)}: ${v}</span>`;
+  }).join('  ');
+}
+
+function updateBPS(bps) {
+  const el = document.getElementById('bps-display');
+  el.textContent = bps >= 1024 ? `${(bps/1024).toFixed(1)} KB/s` : `${bps.toFixed(0)} B/s`;
+}
+
+// Rolling BPS calculation
+setInterval(() => {
+  const bps = bytesRecent / 2; // over 2 seconds
+  updateBPS(bps);
+  bytesRecent = 0;
+
+  // Request fresh stats from backend
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({ action: 'get_stats' }));
+  }
+}, 2000);
+
+// ─────────────────────────────────────────────────────────
+// Status helpers
+// ─────────────────────────────────────────────────────────
+
+function setBLEStatus(on) {
+  const dot = document.getElementById('ble-dot');
+  const lbl = document.getElementById('ble-label');
+  dot.className = 'dot ' + (on ? 'ble-on' : 'ble-off');
+  lbl.textContent = on ? 'BLE on' : 'BLE off';
+}
+
+function setWristStatus(state) {
+  const dot = document.getElementById('wrist-dot');
+  const lbl = document.getElementById('wrist-label');
+  if (state === 'on') {
+    dot.className = 'dot wrist-on';
+    lbl.textContent = 'WRIST ON';
+  } else if (state === 'off') {
+    dot.className = 'dot wrist-off';
+    lbl.textContent = 'WRIST OFF';
+  } else {
+    dot.className = 'dot wrist-unknown';
+    lbl.textContent = 'WRIST?';
+  }
+}
+
+// ─────────────────────────────────────────────────────────
+// Commands
+// ─────────────────────────────────────────────────────────
+
+function toggleCmdPanel() {
+  const panel = document.getElementById('cmd-panel');
+  panel.classList.toggle('open');
+}
+
+function sendCommand() {
+  if (!ws || ws.readyState !== WebSocket.OPEN) {
+    alert('Not connected to backend');
+    return;
+  }
+  const cmd = document.getElementById('cmd-select').value;
+  const payload = document.getElementById('cmd-payload').value.trim().replace(/\s+/g, '');
+  ws.send(JSON.stringify({ action: 'send_command', cmd, payload_hex: payload || '00' }));
+  appendConsole(`[CMD] Sent ${cmd} payload=${payload || '00'}\n`);
+}
+
+function sendRaw() {
+  if (!ws || ws.readyState !== WebSocket.OPEN) {
+    alert('Not connected to backend');
+    return;
+  }
+  const hex = document.getElementById('cmd-raw-hex').value.trim().replace(/\s+/g, '');
+  if (!hex) return;
+  ws.send(JSON.stringify({ action: 'send_raw', hex }));
+  appendConsole(`[RAW] Sent ${hex}\n`);
+}
+
+function sendSetClock() {
+  if (!ws || ws.readyState !== WebSocket.OPEN) { alert('Not connected to backend'); return; }
+  ws.send(JSON.stringify({ action: 'set_clock' }));
+  appendConsole(`[RTC] Sent SET_CLOCK with server-side timestamp\n`);
+}
+
+function sendGetClockSeq() {
+  if (!ws || ws.readyState !== WebSocket.OPEN) { alert('Not connected to backend'); return; }
+  // Start drain to activate command processor, then GET_CLOCK
+  ws.send(JSON.stringify({ action: 'send_command', cmd: 'SEND_HISTORICAL_DATA', payload_hex: '00' }));
+  appendConsole(`[RTC] Sent SEND_HISTORICAL_DATA → waiting 800ms → GET_CLOCK\n`);
+  setTimeout(() => {
+    ws.send(JSON.stringify({ action: 'send_command', cmd: 'GET_CLOCK', payload_hex: '00' }));
+    appendConsole(`[RTC] Sent GET_CLOCK — response will appear in RTC header\n`);
+  }, 800);
+}
+
+// ─────────────────────────────────────────────────────────
+// ── Scan ──────────────────────────────────────────────
+function startScan() {
+  document.getElementById('scan-modal').style.display = 'flex';
+  document.getElementById('scan-status').textContent = 'Scanning for 5s…';
+  document.getElementById('scan-results').innerHTML = '<div style="color:var(--muted);font-size:12px;padding:8px 0">Scanning…</div>';
+  sendWS({ action: 'scan', duration: 5 });
+}
+function closeScanModal() {
+  document.getElementById('scan-modal').style.display = 'none';
+}
+function renderScanResults(devices) {
+  const el = document.getElementById('scan-results');
+  document.getElementById('scan-status').textContent = `Found ${devices.length} device${devices.length !== 1 ? 's' : ''}.`;
+  if (!devices.length) {
+    el.innerHTML = '<div style="color:var(--muted);font-size:12px;padding:8px 0">No devices found.</div>';
+    return;
+  }
+  el.innerHTML = devices.map(d => `
+    <div onclick="connectDevice('${d.address}')" style="display:flex;justify-content:space-between;align-items:center;padding:8px 10px;margin:4px 0;background:#0d1117;border:1px solid #30363d;border-radius:6px;cursor:pointer;transition:border-color .15s" onmouseover="this.style.borderColor='#58a6ff'" onmouseout="this.style.borderColor='#30363d'">
+      <div>
+        <div style="font-size:13px;font-weight:500;color:#e6edf3">${d.name}</div>
+        <div style="font-size:11px;color:var(--muted);font-family:monospace">${d.address}</div>
+      </div>
+      <div style="text-align:right">
+        <div style="font-size:11px;color:${d.rssi > -60 ? '#3fb950' : d.rssi > -80 ? '#e3b341' : '#f85149'}">${d.rssi} dBm</div>
+        <div style="font-size:10px;color:var(--muted)">${d.rssi > -60 ? 'strong' : d.rssi > -80 ? 'good' : 'weak'}</div>
+      </div>
+    </div>`).join('');
+}
+function connectDevice(address) {
+  sendWS({ action: 'connect', address });
+  closeScanModal();
+  appendConsole(`[BLE] Connecting to ${address}…\n`);
+}
+function connectManual() {
+  const addr = document.getElementById('manual-addr').value.trim();
+  if (addr) connectDevice(addr);
+}
+function sendWS(obj) {
+  if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj));
+}
+
+// Clear / Export
+// ─────────────────────────────────────────────────────────
+
+function clearAll() {
+  packets = [];
+  selectedIdx = null;
+  pktCounts = {};
+  document.getElementById('total-count').textContent = '0';
+  document.getElementById('session-start').textContent = new Date().toLocaleTimeString();
+  hrHistory = [];
+  const list = document.getElementById('stream-list');
+  list.innerHTML = '<div id="empty-state"><div class="icon">○</div><p>Cleared.</p></div>';
+  renderDetail(null);
+  updateHRChart();
+  document.getElementById('pkt-counts').innerHTML = '';
+}
+
+function exportJSON() {
+  const blob = new Blob([JSON.stringify(packets, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `whoop_packets_${Date.now()}.json`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+// ─────────────────────────────────────────────────────────
+// Util
+// ─────────────────────────────────────────────────────────
+
+function escHtml(s) {
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+function escAttr(s) {
+  return s.replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+}
+
+// ─────────────────────────────────────────────────────────
+// Boot
+// ─────────────────────────────────────────────────────────
+
+connectWS();
+</script>
+</body>
+</html>
