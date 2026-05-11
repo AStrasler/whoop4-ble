@@ -9,11 +9,60 @@ Direct BLE access to the **Whoop 4.0 strap** — pull your own HR / RR-intervals
 └───────────────┘         └─────────────┘           └──────────────┘
 ```
 
+## What this is, in one minute
+
+Whoop 4.0 records HR, RR intervals, skin temperature, and accelerometer data to internal flash continuously, and broadcasts everything over Bluetooth Low Energy. The data is yours — the protocol is just undocumented. This repo is the cleaned-up output of reverse-engineering that protocol so you can:
+
+- Pull every HR / RR / accel sample the band has stored on flash (~14 days of circular buffer, ~86,000 records per day) into a local JSONL file
+- Stream live HR + RR over the standard BLE Heart Rate Service (works with no auth)
+- See battery, skin temp, and wrist on/off events as the band records them
+- Fix the band's internal clock when flash writes silently stop working (the most common, hardest-to-spot failure mode)
+- Use a browser-based monitor to inspect every BLE packet in real time, decoded
+
+What you **don't** get: Whoop's cloud-side recovery / strain / sleep scores. Those are computed in their cloud. But the raw data is here, and HRV (RMSSD over RR intervals) is a one-liner.
+
 ## Why this exists
 
-Whoop's API became paywalled when its consumer subscriptions ended for some users. The strap itself still records HR + RR intervals + skin temp + accelerometer locally on flash, and broadcasts them over BLE — you just need to know the protocol.
+Whoop's API became paywalled when consumer subscriptions ended for some users. The strap itself doesn't know or care — it keeps recording locally and broadcasting over BLE. You just need to speak its protocol.
 
-This repo is the cleaned-up output of that reverse engineering, including a finding that **isn't documented elsewhere**: `SET_CLOCK` requires a **5-byte payload**, not 4 bytes as documented in the existing community RE projects ([gowhoop](https://github.com/cs-balazs/gowhoop), [whoomp](https://github.com/jogolden/whoomp)). Without the trailing commit byte, the firmware silently accepts the write but **does not update the RTC**, causing flash writes to fail invisibly until the next valid `SET_CLOCK`. See [`docs/PROTOCOL.md`](docs/PROTOCOL.md) for the full discovery write-up.
+This repo also documents a finding that **isn't in the existing community RE projects** ([gowhoop](https://github.com/cs-balazs/gowhoop), [whoomp](https://github.com/jogolden/whoomp)): `SET_CLOCK` requires a **5-byte payload**, not 4 bytes. Without the trailing commit byte, the firmware silently accepts the write but **does not update the RTC**, causing flash writes to fail invisibly until the next valid `SET_CLOCK`. The original 4-byte form is documented in those repos and works for the official Whoop app's frequent re-sync, but in any setup that doesn't apply SET_CLOCK on every connect (e.g. a self-hosted sync running once a day), the RTC drift trap is real. Full discovery write-up in [`docs/PROTOCOL.md`](docs/PROTOCOL.md#rtc-management).
+
+## Show me real packets
+
+```
+[22:38:34.566] HR_SERVICE  (4 bytes)
+  raw:     103e1904
+  flags:   0x10        bit0 = HR size, bit4 = RR present
+  hr_bpm:  62
+  rr_ms:   [1024]      1/1024 sec ticks → milliseconds
+
+[22:38:48.060] → SET_CLOCK  cmd=0x0A  (the 5-byte payload)
+  payload: 1778539127 as LE uint32 + 0x01 commit byte
+
+[22:38:48.612] ← COMMAND_RESPONSE  cmd=0x0B (GET_CLOCK)
+  hw_rtc:      1778507944  → 2026-05-11T07:59:04+00:00  ✓ valid
+  sub_second:  0.031       (32768 Hz hardware crystal)
+
+[22:38:00.662] ← HISTORICAL_DATA  (104 bytes, one HR record from flash)
+  timestamp:  1778513464 → 2026-05-11T09:31:04Z
+  hr_bpm:     60
+  rr_ms:      [993]
+  accel xyz:  [0.5319, 0.3221, 0.806]  (g-force)
+```
+
+Full annotated walkthrough — every packet type, every byte, real captures from the monitor — in **[`docs/SAMPLE_SESSION.md`](docs/SAMPLE_SESSION.md)**.
+
+## Documentation
+
+Read these in order depending on what you want to do:
+
+| If you want to… | Read |
+|------------------|------|
+| **Use it** — pull your own data, set up a sync | This README's [Quickstart](#quickstart) → run the [examples/](examples/) |
+| **Understand what every packet means** | [`docs/SAMPLE_SESSION.md`](docs/SAMPLE_SESSION.md) — annotated real captures |
+| **Look up the protocol** (frame format, commands, byte offsets) | [`docs/PROTOCOL.md`](docs/PROTOCOL.md) — the authoritative reference |
+| **Know what's still unknown** | [`docs/STATUS.md`](docs/STATUS.md) — what's decoded, what's partially understood, what's a black box |
+| **Contribute or extend the RE** | [`CONTRIBUTING.md`](CONTRIBUTING.md) — dev loop, probing methodology, what kind of help is most useful |
 
 ## Quickstart
 
@@ -57,14 +106,18 @@ python3 examples/03_live_hr.py
 
 ```
 whoop4-ble/
-├── README.md                       This file
-├── docs/PROTOCOL.md                Full BLE protocol reference (frame format, commands, decoding tables)
+├── README.md                       This file — start here
+├── CONTRIBUTING.md                 How to extend the RE / probe new commands safely
+├── docs/
+│   ├── PROTOCOL.md                 Authoritative protocol reference
+│   ├── SAMPLE_SESSION.md           Real annotated packet captures, end-to-end
+│   └── STATUS.md                   What's decoded, what's pending, what's a black box
 ├── examples/                       Minimal single-file scripts to copy-paste
 │   ├── 01_fix_rtc.py               SET_CLOCK with the 5-byte payload
 │   ├── 02_drain_to_jsonl.py        Historical data → ./data/hr.jsonl
 │   └── 03_live_hr.py               Live HR via standard GATT service
 ├── src/whoop4/
-│   ├── __init__.py
+│   ├── __init__.py                 Public API
 │   ├── packet.py                   Frame builder + parser (CRC8/CRC32, all packet types, record decoder)
 │   ├── scan.py                     `python3 -m whoop4.scan`
 │   ├── set_clock.py                Standalone SET_CLOCK utility with diagnostics
@@ -73,8 +126,9 @@ whoop4-ble/
 │   └── monitor/                    Browser-based live debug monitor
 │       ├── server.py               Python WS + HTTP backend
 │       └── index.html              Dashboard: HR chart, HRV/RHR, hex viewer, command panel, calendar heat map
+├── pyproject.toml                  Installable package metadata
 ├── requirements.txt
-└── LICENSE
+└── LICENSE                         MIT
 ```
 
 ## Key BLE primitives (cheat sheet)
@@ -169,8 +223,10 @@ MIT — see [LICENSE](LICENSE).
 
 ## Contributing
 
-PRs welcome, especially for:
-- Decoding bytes 24-32 and 45-92 of the 93-byte HISTORICAL_DATA record (still unknown — likely more sensor channels)
-- Decoding EVENT types 32, 101, 102, 103 (we see them but their meaning is unclear)
-- Probing cmd bytes 0x60-0xFF carefully (a vibration trigger seems to live somewhere in 0x43-0x4D)
+PRs welcome. See **[`CONTRIBUTING.md`](CONTRIBUTING.md)** for the dev loop, probing methodology (the same one that found the 5-byte SET_CLOCK fix), and what kind of help is most useful.
+
+A short list of high-leverage open problems:
+- Decode bytes 24-32 and 45-92 of the 93-byte HISTORICAL_DATA record (likely more sensor channels — see [STATUS.md](docs/STATUS.md#black-box))
+- Decode EVENT types 11, 12, 16, 29, 32, 101, 102, 103
+- Probe cmd bytes 0x60-0x7F carefully (a vibration trigger seems to live in 0x43-0x4D; firmware-update commands likely live above 0x80)
 - Linux / Windows testing — most development happened on macOS
