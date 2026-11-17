@@ -350,9 +350,7 @@ async def main():
             print(f"    {d}: {records_by_day[d]:>7,}")
 
     if total_new > 0 or last_hw_rtc is not None:
-        state = {}
-        if STATE_FILE.exists():
-            state = json.loads(STATE_FILE.read_text())
+        state = prev_state
         if total_new > 0:
             state["ble_last_sync"] = datetime.now(timezone.utc).isoformat()
             state["ble_last_records"] = total_new
