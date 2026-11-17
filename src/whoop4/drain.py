@@ -371,4 +371,3 @@ if __name__ == "__main__":
         print("  Find it with: python3 -m whoop4.scan")
         sys.exit(1)
     asyncio.run(main())
-
