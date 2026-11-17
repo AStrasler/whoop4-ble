@@ -1,5 +1,5 @@
 """
-Whoop 4.0 BLE Debug Monitor — Backend
+Whoop 4.0 BLE Debug Monitor â€” Backend
 --------------------------------------
 Connects to the Whoop band, subscribes to all characteristics, parses every
 packet via whoop_packet.py, and broadcasts JSON over WebSocket on port 8766.
@@ -26,8 +26,7 @@ except ImportError:
     sys.exit(1)
 
 try:
-    import websockets
-    from websockets.server import serve as ws_serve
+    from websockets.asyncio.server import serve as ws_serve
 except ImportError:
     print("ERROR: 'websockets' is not installed. Run: pip install websockets")
     sys.exit(1)
@@ -58,7 +57,7 @@ from threading import Thread
 # ---------------------------------------------------------------------------
 
 WHOOP_ADDRESS = os.environ.get("WHOOP_ADDRESS", "")
-target_address: str = WHOOP_ADDRESS  # mutable — updated by scan/connect commands
+target_address: str = WHOOP_ADDRESS  # mutable â€” updated by scan/connect commands
 ble_reconnect_event: asyncio.Event | None = None  # signals ble_loop to reconnect
 
 # Characteristics
@@ -83,7 +82,7 @@ packet_counts: dict = {}
 byte_counts: list = []   # (timestamp, byte_count) rolling window
 console_buffer: str = ""  # accumulated console log text
 
-# Last-known sensor values — populated by auto-info-pull, sent to each new browser client.
+# Last-known sensor values â€” populated by auto-info-pull, sent to each new browser client.
 # This way Battery/Temp/RTC show immediately on page load instead of waiting for next drain.
 last_known: dict = {
     "battery_pct": None,
@@ -127,7 +126,7 @@ def decode_hr_service(raw: bytes) -> dict:
     flags = raw[0]
     result["flags"] = f"0x{flags:02X}"
     offset = 1
-    # Bit 0: HR format — 0=uint8, 1=uint16
+    # Bit 0: HR format â€” 0=uint8, 1=uint16
     if flags & 0x01:
         if len(raw) < offset + 2:
             return result
@@ -142,7 +141,7 @@ def decode_hr_service(raw: bytes) -> dict:
         while offset + 1 < len(raw):
             rr_raw = struct.unpack_from("<H", raw, offset)[0]
             offset += 2
-            # RR in 1/1024 sec units → convert to ms
+            # RR in 1/1024 sec units â†’ convert to ms
             rr_ms = round(rr_raw * 1000 / 1024)
             if 200 <= rr_ms <= 2500:
                 rr_intervals.append(rr_ms)
@@ -726,7 +725,7 @@ async def ble_loop():
                         log.warning(f"Battery characteristic not available: {e}")
 
                 # Auto info-pull: brief drain after connect to populate Battery/Temp/RTC.
-                # Runs in the background — drain flushes a few EVENT packets and a GET_CLOCK
+                # Runs in the background â€” drain flushes a few EVENT packets and a GET_CLOCK
                 # response, which the existing broadcast pipeline forwards to the browser.
                 async def info_pull():
                     await asyncio.sleep(1.5)  # let notifications settle
@@ -744,7 +743,7 @@ async def ble_loop():
                         gc = WhoopPacket(PacketType.COMMAND, 0, CommandNumber.GET_CLOCK, b"\x00").framed_packet()
                         await client.write_gatt_char(CMD_TO_UUID, gc)
                         await asyncio.sleep(3.0)  # let EVENT packets flow through
-                        # ABORT — we don't want to actually drain, just flush
+                        # ABORT â€” we don't want to actually drain, just flush
                         abort = WhoopPacket(PacketType.COMMAND, 0, CommandNumber.ABORT_HISTORICAL_TRANSMITS, b"").framed_packet()
                         await client.write_gatt_char(CMD_TO_UUID, abort)
                         log.info(f"Auto info-pull complete. last_known={last_known}")
@@ -814,3 +813,4 @@ if __name__ == "__main__":
         asyncio.run(main())
     except KeyboardInterrupt:
         log.info("Shutting down.")
+

@@ -24,7 +24,7 @@ classifiers = [
 ]
 dependencies = [
     "bleak>=0.21.0",
-    "websockets>=11.0",
+    "websockets>=16.1",
 ]
 
 [project.urls]
