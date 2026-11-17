@@ -27,6 +27,7 @@ except ImportError:
 
 try:
     from websockets.asyncio.server import serve as ws_serve
+    from websockets.exceptions import ConnectionClosed
 except ImportError:
     print("ERROR: 'websockets' is not installed. Run: pip install websockets")
     sys.exit(1)
@@ -439,8 +440,10 @@ async def ws_handler(websocket):
     try:
         async for message in websocket:
             await handle_ws_command(message)
+    except ConnectionClosed as exc:
+        log.debug("WebSocket client closed its connection: %s", exc)
     except Exception:
-        pass
+        log.exception("WebSocket client handler failed")
     finally:
         connected_ws_clients.discard(websocket)
         log.info(f"WebSocket client disconnected ({len(connected_ws_clients)} total)")
@@ -813,4 +816,5 @@ if __name__ == "__main__":
         asyncio.run(main())
     except KeyboardInterrupt:
         log.info("Shutting down.")
+
 

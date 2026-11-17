@@ -82,8 +82,8 @@ async def main():
                     else:
                         rtc_errors_before.append(val)
                         log(f"  [RTC before] val={val}")
-                except Exception:
-                    pass
+                except (IndexError, ValueError) as exc:
+                    log(f"  [RTC parse skipped] {text[:120]} ({exc})")
             elif "RTC" in text or "Flash" in text or "saving" in text.lower():
                 log(f"  [console] {text[:120]}")
             elif any(k in text for k in ["BLE:", "MFLT"]):
@@ -192,3 +192,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+

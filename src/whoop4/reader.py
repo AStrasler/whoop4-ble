@@ -61,8 +61,8 @@ def log(msg: str):
     try:
         with open(LOG_FILE, "a") as f:
             f.write(line + "\n")
-    except Exception:
-        pass
+    except OSError as exc:
+        print(f"[ble] Could not append session log to {LOG_FILE}: {exc}")
 
 
 # --- Data buffer ---
@@ -340,3 +340,4 @@ if __name__ == "__main__":
         asyncio.run(main())
     except KeyboardInterrupt:
         log("Stopped by user.")
+
