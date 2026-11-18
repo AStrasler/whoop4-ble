@@ -27,6 +27,7 @@ except ImportError:
 
 try:
     from websockets.asyncio.server import serve as ws_serve
+    from websockets.exceptions import ConnectionClosed
 except ImportError:
     print("ERROR: 'websockets' is not installed. Run: pip install websockets")
     sys.exit(1)
@@ -407,40 +408,39 @@ async def ws_handler(websocket):
     connected_ws_clients.add(websocket)
     log.info(f"WebSocket client connected ({len(connected_ws_clients)} total)")
 
-    # Replay buffered packets so the browser catches up instantly
-    if replay_buffer:
-        for payload in replay_buffer:
-            try:
-                await websocket.send(payload)
-            except Exception:
-                break
-        log.info(f"Replayed {len(replay_buffer)} buffered packets to new client")
-
-    # Send greeting with current stats + last-known sensor values so the
-    # topbar (battery/temp/RTC/wrist) populates immediately instead of waiting for next drain.
-    await websocket.send(json.dumps({
-        "ts": datetime.datetime.now(datetime.timezone.utc).isoformat(),
-        "source": "SYSTEM",
-        "raw": "",
-        "parsed": {
-            "type": "CONNECTED",
-            "type_hex": "N/A",
-            "seq": None,
-            "cmd_hex": "N/A",
-            "data_hex": "",
-            "decoded": {
-                "type_name": "CONNECTED",
-                "message": "BLE monitor connected",
-                "packet_counts": packet_counts,
-                "last_known": last_known,
-            }
-        }
-    }))
     try:
+        # Replay buffered packets so the browser catches up instantly.
+        if replay_buffer:
+            for payload in replay_buffer:
+                await websocket.send(payload)
+            log.info(f"Replayed {len(replay_buffer)} buffered packets to new client")
+
+        # Send the greeting inside the disconnect handler too; clients can close
+        # during initial synchronization just as they can during command handling.
+        await websocket.send(json.dumps({
+            "ts": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            "source": "SYSTEM",
+            "raw": "",
+            "parsed": {
+                "type": "CONNECTED",
+                "type_hex": "N/A",
+                "seq": None,
+                "cmd_hex": "N/A",
+                "data_hex": "",
+                "decoded": {
+                    "type_name": "CONNECTED",
+                    "message": "BLE monitor connected",
+                    "packet_counts": packet_counts,
+                    "last_known": last_known,
+                }
+            }
+        }))
         async for message in websocket:
             await handle_ws_command(message)
+    except ConnectionClosed as exc:
+        log.debug("WebSocket client closed its connection: %s", exc)
     except Exception:
-        pass
+        log.exception("WebSocket client handler failed")
     finally:
         connected_ws_clients.discard(websocket)
         log.info(f"WebSocket client disconnected ({len(connected_ws_clients)} total)")

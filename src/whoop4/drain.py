@@ -246,8 +246,8 @@ async def do_one_pass(no_trim: bool, raw_hist_fp, events_fp):
 
     try:
         await client.disconnect()
-    except Exception:
-        pass
+    except Exception as exc:
+        print(f"Warning: BLE disconnect cleanup failed: {exc}", file=sys.stderr)
 
     return new_written, got_complete, last_trim, batch_num, get_clock_result["hw_rtc"]
 
@@ -282,8 +282,14 @@ async def main():
     # Load previous hw_rtc from state to detect reboots
     prev_state = {}
     if STATE_FILE.exists():
-        try: prev_state = json.loads(STATE_FILE.read_text())
-        except Exception: pass
+        try:
+            loaded_state = json.loads(STATE_FILE.read_text())
+            if isinstance(loaded_state, dict):
+                prev_state = loaded_state
+            else:
+                print("Warning: ignoring non-object BLE state file", file=sys.stderr)
+        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+            print(f"Warning: ignoring unreadable BLE state file: {exc}", file=sys.stderr)
     prev_hw_rtc = prev_state.get("ble_last_hw_rtc")
 
     try:
@@ -344,9 +350,7 @@ async def main():
             print(f"    {d}: {records_by_day[d]:>7,}")
 
     if total_new > 0 or last_hw_rtc is not None:
-        state = {}
-        if STATE_FILE.exists():
-            state = json.loads(STATE_FILE.read_text())
+        state = prev_state
         if total_new > 0:
             state["ble_last_sync"] = datetime.now(timezone.utc).isoformat()
             state["ble_last_records"] = total_new
